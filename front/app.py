@@ -1,6 +1,8 @@
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 import requests
+import base64
+import json
 
 def load_image(image_file):
     img = Image.open(image_file)
@@ -12,34 +14,43 @@ def draw_rectangles(image_path, rectangles):
     font = ImageFont.load_default()
 
     for rect_info in rectangles:
-        coordinates = (rect_info["xmin"], rect_info["ymin"], rect_info["xmax"], rect_info["ymax"])
-        text = rect_info["name"]
+        xmin = rect_info.get("xmin", 0)
+        ymin = rect_info.get("ymin", 0)
+        xmax = rect_info.get("xmax", 0)
+        ymax = rect_info.get("ymax", 0)
+        text = ""  # Assuming there is no "name" key in the rectangles
+
+        coordinates = (xmin, ymin, xmax, ymax)
 
         draw.rectangle(coordinates, outline="red", width=3)
-        draw.text((coordinates[0], coordinates[1] - 20), text, fill="red", font=font)
+        draw.text((xmin, ymin - 20), text, fill="red", font=font)
 
     return img
 
 st.set_page_config(page_title="OZ Fish", page_icon=":fish:", layout="centered")
 
 """
-# OZ FISH 🐟
+# OZ Fish 🐟
 """
 image_file = st.file_uploader("Please upload Image/Video")
 
 if image_file is not None:
     file_details = {"filename": image_file.name, "filetype": image_file.type, "filesize": image_file.size}
-    st.write(file_details)
+    #st.write(file_details)
     st.image(load_image(image_file))
 
     url = "http://127.0.0.1:8000/"
-    response = requests.get(url).json()
+    # response = requests.get(url).json()
 
-    rectangles = [response[box] for box in response]
+    payload = {"file": image_file.getvalue()}
+    post_response = requests.post(url=f"{url}upload/", files=payload)
+
+    rectangles = post_response.json()  # Assuming the response is a JSON array
 
     if st.button("Analyse Image"):
         st.write('I was clicked 🎉')
-        drawn_image = draw_rectangles(image_file, rectangles)
+        drawn_image = draw_rectangles(image_file.name, rectangles)
         st.image(drawn_image, caption="Image with Rectangles.", use_column_width=True)
+        #st.write(post_response.json())
     else:
         st.write('I was not clicked 😞')
