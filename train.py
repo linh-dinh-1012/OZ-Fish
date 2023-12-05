@@ -11,34 +11,97 @@ from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 from tensorflow.dtypes import int32
 from tensorflow.image import resize
 import datetime
+from keras.models import load_model
 from tensorflow.keras.callbacks import TensorBoard
 from sklearn.model_selection import train_test_split
+import os
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+from tensorflow.keras.utils import img_to_array
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+from ultralytics import YOLO
+from keras.models import load_model
+from tensorflow import reshape
 
-components = {"FILENAME":0, "FAMILY": 1, "GENUS": 2, "SPECIES": 3}
+
+#components = {"file_name":0, "family_id": 1, "count": 2, "normalized_family_id": 3}
 
 IMG_HEIGHT=250
 IMG_WIDTH=250
-#NUM_CLASSES=75
+EPOCHS=1
 BATCH_SIZE=100
 PATH ="../raw_data/ozfish-crops/FDFML/crops/"
-CROP_FILE_CSV="./crop_labeled_simplified.csv"
+CROP_FILE_CSV="./crop_labeled.csv"
+
+# components is a dictionnary containing the list of fields in the CSV file, plus some additional ones added as we process
+components = {}
 
 def preprocess_files(filename, threshold_families, threshold_balance, proportion):
+    global components # so that components is updated and no a local variable
+
     df = pd.read_csv(filename, delimiter=",", encoding="latin")
+
+    # file_name,family,genus,species,family_genus_species,family_id,genus_id,species_id,species_long
+    # A000001_L.avi.5107.806.371.922.448.png,Scaridae,Chlorurus,capistratoides,Scaridae Chlorurus capistratoides,0,0,0,Chlorurus capistratoides
+    # components = pd.DataFrame(df.columns)[0].to_dict()
+    # {0: 'file_name', 1: 'family', 2: 'genus', 3: 'species', 4: 'family_genus_species', 5: 'family_id', 6: 'genus_id', 7: 'species_id', 8: 'species_long'}
+
+    # inverse the dictionary
+    # components = {v: k for k, v in components.items()}
+    # {'file_name': 0, 'family': 1, 'genus': 2, 'species': 3, 'family_genus_species': 4, 'family_id': 5, 'genus_id': 6, 'species_id': 7, 'species_long': 8}
+
+    # add normalized_family_id at the end of the dictionnary
+    # components["normalized_family_id"]=len(components)
+    # {'file_name': 0, 'family': 1, 'genus': 2, 'species': 3, 'family_genus_species': 4, 'family_id': 5, 'genus_id': 6, 'species_id': 7, 'species_long': 8, 'normalized_family_id': 9}
+
     df = remove_small_families(df,threshold_families)
     df = cut_big_classes(df,threshold_balance,proportion)
-
     nb_families = df['family_id'].nunique()
-    #nb_families = df['family_id'].max() +1
     print(f"number of families:{nb_families}")
-    df_train, df_test = train_test_split(df, stratify=df.loc[:,"family_id"])
-    df_train, df_val = train_test_split(df_train, stratify=df_train.loc[:,"family_id"])
 
-    print(f"train:{df_train.shape}")
-    print(f"val:{df_val.shape}")
-    print(f"test:{df_test.shape}")
 
-    return nb_families, get_dataset_from_df(df_train), get_dataset_from_df(df_val), get_dataset_from_df(df_test)
+    # generate a df with colmuns family_id as index and count as a column
+    df1 = pd.DataFrame(df['family_id'].value_counts())
+
+    # create a new column with the index content
+    df1["raw_family_id"]=df1.index
+    df1.reset_index(inplace=True)
+
+    df1["normalized_family_id"]=df1.index
+    df1.drop(columns=["family_id"], axis=1, inplace=True)
+    df1.rename(columns={"raw_family_id":"family_id"}, inplace=True)
+
+    mappings = df.merge(df1, on='family_id', how='outer')
+
+    # initialize components, will be used during the subsequent process_record function
+    components = pd.DataFrame(mappings.columns)[0].to_dict()
+    components = {v: k for k, v in components.items()}
+
+#     Data columns (total 11 columns):
+#  #   Column                Non-Null Count  Dtype
+# ---  ------                --------------  -----
+#  0   file_name             25307 non-null  object
+#  1   family                25307 non-null  object
+#  2   genus                 25307 non-null  object
+#  3   species               25307 non-null  object
+#  4   family_genus_species  25307 non-null  object
+#  5   family_id             25307 non-null  int64
+#  6   genus_id              25307 non-null  int64
+#  7   species_id            25307 non-null  int64
+#  8   species_long          25307 non-null  object
+#  9   count                 25307 non-null  int64
+#  10  normalized_family_id  25307 non-null  int64
+
+    df_train, df_test = train_test_split(mappings, stratify=mappings.loc[:,"normalized_family_id"])
+    df_train, df_val = train_test_split(df_train, stratify=df_train.loc[:,"normalized_family_id"])
+
+    # print(f"train:{df_train.shape}")
+    # print(f"val:{df_val.shape}")
+    # print(f"test:{df_test.shape}")
+
+    return nb_families, mappings, get_dataset_from_df(df_train), get_dataset_from_df(df_val), get_dataset_from_df(df_test)
 
 def remove_small_families(dataframe, treshold):
     '''removes the classes that have a number of occurences lower than a specified treshold'''
@@ -61,21 +124,22 @@ def cut_big_classes(dataframe, treshold : int, proportion : float):
         dataframe = dataframe.drop(big_family_indices[:int(len(big_family_indices) * proportion)])
     return dataframe
 
-def get_label(record, component="FAMILY"):
-  position = components[component]
-  label = record[position]
-  return strings.to_number(label, out_type=int32)
+def get_label(record, component="normalized_family_id"):
+    position = components[component]
+    label = record[position]
+    return strings.to_number(label, out_type=int32)
 
-def get_image(record):
-  image_name = record[0]
+def get_image(record, component="file_name"):
+  position = components[component]
+  image_name = record[position]
   file_path = strings.join([PATH, image_name])
   file = read_file(file_path)
   image = decode_png(file)
   return resize(image, size=(IMG_HEIGHT, IMG_WIDTH))/255
 
 def process_record(record):
-  label = get_label(record, component="FAMILY")
-  image = get_image(record)
+  label = get_label(record, component="normalized_family_id")
+  image = get_image(record, component="file_name")
   return image, label
 
 def get_model(nb_families):
@@ -95,9 +159,9 @@ def get_model(nb_families):
     return model
 
 def compile_model(model):
-        model.compile(optimizer='adam',
-              loss=SparseCategoricalCrossentropy(from_logits=False),
-              metrics=['accuracy'])
+    model.compile(optimizer='adam',
+            loss=SparseCategoricalCrossentropy(from_logits=False),
+            metrics=['accuracy'])
 
 def get_dataset_from_df(df):
     X = df.astype(str)
@@ -115,6 +179,21 @@ def get_dataset(filename):
     df = pd.read_csv(filename, delimiter=",", encoding="latin", header=0)
     return get_dataset_from_df(df)
 
+
+def plot_history(history):
+    plt.plot(history.history['loss'])
+    plt.title('Train loss')
+    plt.ylabel('Loss')
+    plt.xlabel('Epoch')
+    plt.show()
+
+def get_name_from_class_id(mapping_df, normalized_class_id):
+    df = mapping_df[mapping_df.normalized_family_id==normalized_class_id]
+    family = df.head(1).family
+    return family.iloc[0]
+
+TRAIN = False
+
 if __name__ == '__main__':
 
     # Generate the TF datasets for train and val
@@ -124,59 +203,96 @@ if __name__ == '__main__':
     # train_ds = get_dataset("./train_crop_label.csv")
     # val_ds = get_dataset("./val_crop_label.csv") #("./val_crop_sample.csv")
 
-    nb_families, train_ds, val_ds, test_ds = preprocess_files(CROP_FILE_CSV, 150, 3000, 0.7)
+    nb_families, mappings, train_ds, val_ds, test_ds = preprocess_files(CROP_FILE_CSV, 150, 3000, 0.7)
 
-    # nb_families=75 # why ?
+    if (TRAIN):
 
-    # TEST: retrieve 1st tf train record
-    # for image, label in train_ds.take(1):
-    #     #print(image[0].shape)
-    #     plt.imshow(resize(image[1], (IMG_HEIGHT, IMG_WIDTH)))
-    #     #print(type(image))
-    #     #plt.title(label[0])
-    # plt.show()
 
-    # Train the model
-    model = get_model(nb_families)
-    compile_model(model)
-    print(model.summary())
+        # TEST: retrieve 1st tf train record
+        # for image, label in train_ds.take(1):
+        #     #print(image[0].shape)
+        #     plt.imshow(resize(image[1], (IMG_HEIGHT, IMG_WIDTH)))
+        #     #print(type(image))
+        #     #plt.title(label[0])
+        # plt.show()
 
-    # Checkpoint to save intermediary weights
-    checkpoint_filepath = './tmp/checkpoint'
-    model_checkpoint_callback = ModelCheckpoint(
-        filepath=checkpoint_filepath,
-        save_weights_only=True,
-        monitor='val_accuracy',
-        mode='max',
-        save_best_only=True)
 
-    # Early Stopper
-    early_stopper = EarlyStopping(patience = 10,
-        monitor="val_loss",
-        restore_best_weights=True)
+        print("Training ...")
+        #Train the model
+        model = get_model(nb_families)
+        compile_model(model)
+        # print(model.summary())
 
-    # Tensor Board
-    log_folder = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        # Checkpoint to save intermediary weights
+        checkpoint_filepath = './tmp/checkpoint'
+        model_checkpoint_callback = ModelCheckpoint(
+            filepath=checkpoint_filepath,
+            save_weights_only=True,
+            monitor='val_accuracy',
+            mode='max',
+            save_best_only=True)
 
-    tensorBoard = TensorBoard(log_dir=log_folder,
-                         histogram_freq=1,
-                         write_graph=True,
-                         write_images=True,
-                         update_freq='epoch',
-                         profile_batch=2,
-                         embeddings_freq=1)
-    # Fit model
-    history = model.fit(
-        train_ds,
-        validation_data=val_ds,
-        epochs=3,
-        callbacks=[model_checkpoint_callback, early_stopper, tensorBoard],
-        batch_size=BATCH_SIZE
-        )
+        # Early Stopper
+        early_stopper = EarlyStopping(patience = 10,
+            monitor="val_loss",
+            restore_best_weights=True)
 
-    model.evaluate(test_ds)
+        # Tensor Board
+        log_folder = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    # Save the entire model as a `.keras` zip archive.
-    model_folder = "models/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        tensorBoard = TensorBoard(log_dir=log_folder,
+                             histogram_freq=1,
+                             write_graph=True,
+                             write_images=True,
+                             update_freq='epoch',
+                             profile_batch=2,
+                             embeddings_freq=1)
+        # Fit model
+        history = model.fit(
+            train_ds,
+            validation_data=val_ds,
+            epochs=EPOCHS,
+            callbacks=[model_checkpoint_callback, early_stopper, tensorBoard],
+            batch_size=BATCH_SIZE
+            )
 
-    model.save(model_folder+'crop_model.keras')
+        plot_history(history)
+
+        # Save the entire model as a `.keras` zip archive.
+        model_folder = "./models/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+        os.makedirs(model_folder, exist_ok=True)
+        model.save(model_folder+'/crop_model.keras')
+
+        print("Evaluating ...")
+        eval = model.evaluate(test_ds) # equivalent X_test, y_test
+        # print(eval)
+
+    else:   # PREDICT
+
+        image = "../B000452_L.MP4.40040.png"
+
+        # Load the YOLO model for Bbox localization
+        yolo_model = YOLO("./best.pt")  # reuse fish trained model
+        results = yolo_model(source=image)  # predict on an image
+
+        SAVED_KERAS_FILE="./models/20231201-155151/crop_model.keras"
+
+        # Load the KERAS model for Bbox content classification
+        fish_classification_model = load_model(SAVED_KERAS_FILE)
+        # fish_classification_model.summary()
+
+        img = mpimg.imread(image)
+        for result in results:
+            boxes = result.boxes.cpu().numpy()
+            for i, box in enumerate(boxes):
+                r = box.xyxy[0].astype(int)
+                crop = img[r[1]:r[3], r[0]:r[2]]
+
+                resized_crop = resize(crop, size=(IMG_HEIGHT, IMG_WIDTH))/255
+
+                resized_crop = reshape(resized_crop, shape=(1, IMG_HEIGHT, IMG_WIDTH, 3))
+                prediction = fish_classification_model.predict(resized_crop)
+                predicted_class_id = np.argmax(prediction)
+                class_name = get_name_from_class_id(mapping_df=mappings, normalized_class_id=predicted_class_id)
+                print(f"predicted fish:{class_name}")
