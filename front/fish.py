@@ -27,6 +27,7 @@ from sklearn.model_selection import train_test_split
 
 # import tensorflow as tf
 from ultralytics import YOLO
+from PIL import Image
 
 
 class Fish:
@@ -121,12 +122,14 @@ class Fish:
         # Load the KERAS model for Bbox content classification
         fish_classification_model = load_model(self.CLASSIFICATION_MODEL)
         # fish_classification_model.summary()
-        img = mpimg.imread(image)
+        img = np.array(image)/255
+        print(img.shape, img.mean())
         for result in results:
             boxes = result.boxes.cpu().numpy()
             name =[]
             for i, box in enumerate(boxes):
                 r = box.xyxy[0].astype(int)
+                print(r)
                 crop = img[r[1]:r[3], r[0]:r[2]]
 
                 resized_crop = resize(crop, size=(self.IMG_HEIGHT, self.IMG_WIDTH))/255
