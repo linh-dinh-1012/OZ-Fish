@@ -9,11 +9,6 @@ This project was developed during the Le Wagon bootcamp (2023). Its goal is to c
 - Streamlit for building a simple web interface  
 - Python, OpenCV for data preprocessing and handling
 
-## 🎯 My Contributions  
-- Prepared and cleaned the image dataset (including annotations)  
-- Trained and fine-tuned a YOLO model to recognize multiple fish species  
-- Built and deployed a working prototype using Streamlit
-
 ## 🚀 Outcome  
 - **Live app**: [ozfish.streamlit.app](https://ozfish.streamlit.app/)  
 - **Source code**: [github.com/Pippow/OZ-Fish](https://github.com/Pippow/OZ-Fish)
